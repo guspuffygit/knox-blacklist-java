@@ -1,0 +1,160 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+	id 'signing'
+	id 'jacoco'
+	id 'com.diffplug.spotless' version '8.1.0'
+	id 'io.github.gradle-nexus.publish-plugin' version '2.0.0'
+	id 'io.freefair.lombok' version '9.2.0'
+}
+
+apply from: 'publish.gradle'
+
+String versionSuffix = System.getenv("STAGING") ? "" :
+		project.ext.has('versionSuffix') ? project.ext.get('versionSuffix') : "-SNAPSHOT"
+
+allprojects {
+	repositories { mavenCentral() }
+	group = 'com.sentientsimulations'
+	version = version + versionSuffix
+	java {
+		toolchain {
+			languageVersion = JavaLanguageVersion.of(25)
+		}
+	}
+}
+
+tasks.register('printVersion') {
+	doLast { println project.version }
+}
+
+jar.getDestinationDirectory().set(new File(buildDir, 'libs'))
+
+dependencies {
+	api 'org.jetbrains:annotations:20.1.0'
+
+	api('com.google.guava:guava:31.1-jre') {
+		exclude group: 'com.google.errorprone'
+		exclude group: 'org.checkerframework'
+		exclude module: 'failureaccess'
+		exclude module: 'listenablefuture'
+		exclude module: 'j2objc-annotations'
+	}
+
+	api 'org.slf4j:slf4j-api:2.0.16'
+	api 'ch.qos.logback:logback-classic:1.5.16'
+	api 'com.fasterxml.jackson.core:jackson-databind:2.21.0'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
+	testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testImplementation 'io.github.java-diff-utils:java-diff-utils:4.10'
+}
+
+test {
+	useJUnitPlatform()
+	finalizedBy jacocoTestReport
+
+	testLogging {
+		events "passed", "skipped", "failed", "standardOut", "standardError"
+		showStandardStreams = true
+		showExceptions = true
+		showCauses = true
+		showStackTraces = true
+		exceptionFormat = "full"
+	}
+}
+
+jacocoTestReport {
+	dependsOn test
+
+	reports {
+		html.required = true
+		xml.required = true
+	}
+}
+
+jar {
+	from sourceSets.main.output
+	manifest {
+		attributes('Implementation-Version': project.version)
+	}
+}
+
+publishing {
+	publications {
+		coreMavenJava(MavenPublication) {
+			from project.components.java
+			artifactId = 'knox-blacklist-java'
+			pom {
+				name = 'Knox Blacklist Java'
+				description = 'Knox Blacklist Java - A java api client for https://www.knoxblacklist.com'
+				url = 'https://www.knoxblacklist.com'
+				scm {
+					connection = 'scm:git:git://github.com/guspuffygit/knox-blacklist-java.git'
+					developerConnection = 'scm:git:ssh://github.com:guspuffygit/knox-blacklist-java.git'
+					url = 'https://github.com/guspuffygit/knox-blacklist-java'
+				}
+				licenses {
+					license {
+						name = 'MIT License'
+						url = 'https://opensource.org/licenses/MIT'
+					}
+				}
+				developers {
+					developer {
+						id = 'guspuffygit'
+						name = 'guspuffygit'
+					}
+				}
+			}
+		}
+	}
+}
+
+signing {
+	def signingKey = findProperty("signingKey")
+	def signingPassword = findProperty("signingPassword")
+
+	if (!project.hasProperty('skipSigning') && (signingKey || findProperty("signing.keyId"))) {
+		if (signingKey) {
+			useInMemoryPgpKeys(signingKey, signingPassword)
+		}
+		sign(publishing.publications.coreMavenJava)
+	}
+}
+
+nexusPublishing {
+	repositories {
+		sonatype {
+			nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+			snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
+
+			username = System.getenv("MAVEN_USERNAME")
+			password = System.getenv("MAVEN_PASSWORD")
+		}
+	}
+}
+
+spotless {
+	java {
+		target 'src/**/*.java'
+		cleanthat()
+		googleJavaFormat().aosp().reflowLongStrings(false)
+		removeUnusedImports()
+		trimTrailingWhitespace()
+		endWithNewline()
+	}
+	groovyGradle {
+		target '**/*.gradle'
+		greclipse()
+	}
+	json {
+		target '**/*.json'
+		gson().indentWithSpaces(2)
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.compilerArgs << "-Xlint:deprecation" << "-Xdiags:verbose"
+}
